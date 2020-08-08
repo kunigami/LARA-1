@@ -1,16 +1,11 @@
-
-# coding: utf-8
-
-# In[2]:
-
 import json
 import nltk
 from nltk.corpus import stopwords
-import os 
+import os
 import glob
 from nltk.stem.porter import *
 from nltk import FreqDist
-path="hotelReviews/"
+path="data/reviews/"
 projectSettings="settings/"
 from collections import defaultdict
 import string
@@ -27,19 +22,20 @@ class ReadData:
         self.aspectSentences = defaultdict(list) #aspect to Sentences mapping
         self.wordIndexMapping={} #word to its index in the corpus mapping
         self.aspectIndexMapping={} #aspect to its index in the corpus mapping
-    
+
     def createWordIndexMapping(self):
         i=0
         for word in self.wordFreq.keys():
             self.wordIndexMapping[word]=i
             i+=1
         #print(self.wordIndexMapping)
-        
+
     def readAspectSeedWords(self):
         with open(projectSettings+"SeedWords.json") as fd:
             seedWords = json.load(fd)
             for aspect in seedWords["aspects"]:
                 self.aspectKeywords[aspect["name"]] = aspect["keywords"]
+        assert len(self.aspectKeywords) > 0, 'Must read from SeedWords.json'
 
     def createAspectIndexMapping(self):
         i=0;
@@ -47,7 +43,7 @@ class ReadData:
             self.aspectIndexMapping[aspect]=i
             i+=1
         #print(self.aspectIndexMapping)
-                
+
     def readStopWords(self):
         with open(projectSettings+"stopwords.dat") as fd:
             for stopWord in fd:
@@ -55,13 +51,13 @@ class ReadData:
         for stopWord in stopwords.words('english'):
             if stopWord not in self.stopWords:
                 self.stopWords.append(stopWord)
-        #print(self.stopWords)
+        assert len(self.stopWords) > 0, 'Must read from stopwords.dat'
 
     def stemmingStopWRemoval(self, review, vocab):
         ''' Does Following things:
         1. Tokenize review into sentences, and then into words
         2. Remove stopwords, punctuation and stem each word
-        3. Add words into vocab 
+        3. Add words into vocab
         4. Make Sentence objects and corresponding Review object
         '''
         reviewObj = Review()
@@ -69,12 +65,12 @@ class ReadData:
         for ratingType, rating in review["Ratings"].items():
             reviewObj.ratings[ratingType] = rating
         reviewObj.reviewId = review["ReviewID"]
-        
+
         stemmer = PorterStemmer()
         reviewContent = review["Content"]
         #TODO: Append title too!
         sentencesInReview = nltk.sent_tokenize(reviewContent)
-        puncs = set(string.punctuation) #punctuation marks 
+        puncs = set(string.punctuation) #punctuation marks
         for sentence in sentencesInReview:
             wordList=[]
             words = nltk.word_tokenize(sentence)
@@ -97,9 +93,13 @@ class ReadData:
         and creates list of lessFrequentWords (frequency<5)
         '''
         vocab=[]
+        i = 0
         for filename in glob.glob(os.path.join(path, '*.json')):
             fd=open(filename)
             data=json.load(fd)
+            if i > 10:
+                break
+            i += 1
             for review in data["Reviews"]:
                 self.stemmingStopWRemoval(review,vocab)
         self.wordFreq = FreqDist(vocab)
@@ -108,11 +108,14 @@ class ReadData:
                 self.lessFrequentWords.add(word)
         for word in self.lessFrequentWords:
             del self.wordFreq[word]
+
+        assert len(self.wordFreq) > 0, 'Must read from hotelReviews/*.json'
+
         self.createWordIndexMapping()
-        
+
         #print("Less Frequent Words ",self.lessFrequentWords)
         #print("Vocab ", self.wordFreq.pformat(10000))
-                 
+
     def removeLessFreqWords(self):
         emptyReviews = set()
         for review in self.allReviews:
@@ -128,5 +131,5 @@ class ReadData:
                     emptySentences.add(sentence)
             review.sentences[:] = [x for x in review.sentences if x not in emptySentences]
             if not review.sentences:
-                emptyReviews.add(review)  
+                emptyReviews.add(review)
         self.allReviews[:] = [x for x in self.allReviews if x not in emptyReviews]

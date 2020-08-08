@@ -1,39 +1,35 @@
-
-# coding: utf-8
-
-# In[3]:
-
+import os
 import heapq
 import json
 from collections import defaultdict
-from ReadData import ReadData
 from nltk import FreqDist
 import numpy as np
+
 modelDataDir = "modelData/"
 
 class BootStrap:
     def __init__(self, readDataObj):
         self.corpus = readDataObj
         #Aspect,Word -> freq matrix - frequency of word in that aspect
-        self.aspectWordMat = defaultdict(lambda: defaultdict(int)) 
+        self.aspectWordMat = defaultdict(lambda: defaultdict(int))
         #Aspect --> total count of words tagged in that aspect
         # = sum of all row elements in a row in aspectWordMat matrix
         self.aspectCount = defaultdict(int)
-        #Word --> frequency of jth tagged word(in all aspects) 
+        #Word --> frequency of jth tagged word(in all aspects)
         # = sum of all elems in a column in aspectWordMat matrix
         self.wordCount = defaultdict(int)
-        
+
         #Top p words from the corpus related to each aspect to update aspect keyword list
         self.p=5
         self.iter=7
-        
+
         #List of W matrix
         self.wList=[]
         #List of ratings Dictionary belonging to review class
         self.ratingsList=[]
         #List of Review IDs
         self.reviewIdList=[]
-        
+
         '''def calcC1_C2_C3_C4(self):
             for aspect, sentence in self.corpus.aspectSentences.items():
                 for sentence in sentences:
@@ -42,7 +38,7 @@ class BootStrap:
                     for word,freq in sentence.wordFreqDict.items():
                         self.aspectWordMat[aspect][word]+=freq
         '''
-        
+
     def assignAspect(self, sentence): #assigns aspects to sentence
         sentence.assignedAspect = []
         count = defaultdict(int) #count used for aspect assignment as in paper
@@ -58,7 +54,7 @@ class BootStrap:
                     sentence.assignedAspect.append(aspect)
         if(len(sentence.assignedAspect)==1): #if only 1 aspect assigned to it
             self.corpus.aspectSentences[sentence.assignedAspect[0]].append(sentence)
-            
+
     def populateAspectWordMat(self):
         self.aspectWordMat.clear()
         for aspect, sentences in self.corpus.aspectSentences.items():
@@ -67,30 +63,30 @@ class BootStrap:
                     self.aspectWordMat[aspect][word]+=freq
                     self.aspectCount[aspect]+=freq
                     self.wordCount[word]+=freq
-    
+
     def chiSq(self, aspect, word):
         #Total number of (tagged) word occurrences
         C = sum(self.aspectCount.values())
-        
+
         #Frequency of word W in sentences tagged with aspect Ai
         C1 = self.aspectWordMat[aspect][word]
-        
+
         #Frequency of word W in sentences NOT tagged with aspect Ai
         C2 = self.wordCount[word]-C1
-        
+
         #Number of sentences of aspect A, NOT contain W
-        C3 = self.aspectCount[aspect]-C1 
-        
+        C3 = self.aspectCount[aspect]-C1
+
         #Number of sentences of NOT aspect A, NOT contain W
         C4 = C-C1
-        
+
         deno = (C1+C3)*(C2+C4)*(C1+C2)*(C3+C4)
         #print(aspect, word, C, C1, C2, C3, C4)
         if deno!=0:
             return (C*(C1*C4 - C2*C3)*(C1*C4 - C2*C3))/deno
         else:
             return 0.0
-        
+
     def calcChiSq(self):
         topPwords = {}
         for aspect in self.corpus.aspectKeywords.keys():
@@ -105,7 +101,7 @@ class BootStrap:
                     maxAspect = aspect
             if maxAspect!="":
                 topPwords[maxAspect].append((maxChi, word))
-                
+
         changed=False
         for aspect in self.corpus.aspectKeywords.keys():
             for t in heapq.nlargest(self.p,topPwords[aspect]):
@@ -113,7 +109,7 @@ class BootStrap:
                     changed=True
                     self.corpus.aspectKeywords[aspect].append(t[1])
         return changed
-    
+
     # Populate wList,ratingsList and reviewIdList
     def populateLists(self):
         for review in self.corpus.allReviews:
@@ -126,9 +122,9 @@ class BootStrap:
             if len(W)!=0:
                 self.wList.append(W)
                 self.ratingsList.append(review.ratings)
-                self.reviewIdList.append(review.reviewId)  
-                
-        
+                self.reviewIdList.append(review.reviewId)
+
+
     def bootStrap(self):
         changed=True
         while self.iter>0 and changed:
@@ -144,29 +140,12 @@ class BootStrap:
             for sentence in review.sentences:
                 self.assignAspect(sentence)
         print(self.corpus.aspectKeywords)
-    
+
     # Saves the object into the given file
     def saveToFile(self,fileName,obj):
+        if not os.path.exists(modelDataDir):
+            os.mkdir(modelDataDir)
+
         with open(modelDataDir+fileName,'w') as fp:
             json.dump(obj,fp)
             fp.close()
-            
-rd = ReadData()
-rd.readAspectSeedWords()
-rd.readStopWords()
-rd.readReviewsFromJson()
-rd.removeLessFreqWords()
-bootstrapObj = BootStrap(rd)
-bootstrapObj.bootStrap()
-bootstrapObj.populateLists()
-bootstrapObj.saveToFile("wList.json",bootstrapObj.wList)
-bootstrapObj.saveToFile("ratingsList.json",bootstrapObj.ratingsList)
-bootstrapObj.saveToFile("reviewIdList.json",bootstrapObj.reviewIdList)
-bootstrapObj.saveToFile("vocab.json",list(bootstrapObj.corpus.wordFreq.keys()))
-bootstrapObj.saveToFile("aspectKeywords.json",bootstrapObj.corpus.aspectKeywords)
-
-
-# In[ ]:
-
-
-

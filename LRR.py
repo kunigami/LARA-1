@@ -9,7 +9,9 @@ modelDataDir = "modelData/"
 BETA_ITERATIONS = 150
 
 class LRR:
-    def __init__(self):
+    def __init__(self, should_assert=False):
+        self.should_assert = should_assert
+
         words = self.loadDataFromFile("vocab.json")
         self.word_index_mapping = self.createWordIndexMapping(words)
         self.words_cnt = len(self.word_index_mapping)
@@ -62,6 +64,8 @@ class LRR:
         self.Wd = []
         for d in range(self.reviews_cnt):
             self.Wd.append(self.createWMatrix(self.wList[d]))
+        if should_assert:
+            assert_words_matrix(Wd, reviews_cnt=self.reviews_cnt, aspect_cnt=self.aspect_cnt)
 
         # matrix sigma for the whole corpus - k*k matrix
         # Sigma needs to be positive definite, with diagonal elems positive
@@ -458,3 +462,14 @@ def maximum_likelihood_beta_grad(
             beta_i += inner_bracket[d] * alpha[i][d] * W[i, :]
         grad_beta_mat[i, :] = beta_i
     return grad_beta_mat.reshape((aspect_cnt * words_cnt,))
+
+def assert_words_matrix(Wd, reviews_cnt, aspect_cnt):
+    assert reviews_cnt == len(Wd), "Wd's first dimension is the set of reviews"
+
+    for d in range(reviews_cnt):
+        freq_by_aspect = Wd[d]
+        assert aspect_cnt == len(freq_by_aspect), \
+            "freq_by_aspect first dimension is the set of aspects"
+
+        total = sum(freq_by_aspect)
+        assert total == 1.0, "freq_by_aspect should be normalized"

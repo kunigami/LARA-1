@@ -9,6 +9,7 @@ import numpy as np
 
 nltk.download('punkt')
 nltk.download('stopwords')
+nltk.download('wordnet')
 
 # This is where we store the temporary artifacts created
 if not os.path.exists('output'):

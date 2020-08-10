@@ -1,7 +1,7 @@
 {"aspects":[
-		{"name":"value", "keywords":["value", "price"]},
-		{"name":"room", "keywords":["room", "space"]},
-		{"name":"location", "keywords":["location", "locate"]},
-		{"name":"cleanliness", "keywords":["clean", "dirty"]},
-		{"name":"service", "keywords":["service", "manager"]}
+		{"name":"value", "keywords":["value", "price", "quality", "worth"]},
+		{"name":"room", "keywords":["room", "suite", "view", "bed"]},
+		{"name":"location", "keywords":["location", "traffic", "minute"]},
+		{"name":"cleanliness", "keywords":["clean", "dirty", "maintain", "smell"]},
+		{"name":"service", "keywords":["service", "food", "breakfast", "buffet"]}
 	]}

@@ -4,6 +4,7 @@ from nltk.corpus import stopwords
 import os
 import glob
 from nltk.stem.porter import *
+from nltk.stem import WordNetLemmatizer
 from nltk import FreqDist
 path="data/reviews/"
 projectSettings="settings/"
@@ -66,7 +67,8 @@ class ReadData:
             reviewObj.ratings[ratingType] = rating
         reviewObj.reviewId = review["ReviewID"]
 
-        stemmer = PorterStemmer()
+        #stemmer = PorterStemmer()
+        lemmatizer = WordNetLemmatizer()
         reviewContent = review["Content"]
         #TODO: Append title too!
         sentencesInReview = nltk.sent_tokenize(reviewContent)
@@ -78,7 +80,7 @@ class ReadData:
                 if not all(c.isdigit() or c in puncs for c in word):
                     word = word.lower()
                     if word not in self.stopWords:
-                        word=stemmer.stem(word.lower())
+                        word=lemmatizer.lemmatize(word.lower())
                         vocab.append(word)
                         wordList.append(word)
             if wordList:

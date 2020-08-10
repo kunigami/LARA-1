@@ -28,3 +28,5 @@ ReadData contains all functions for processing the reviews. BootStrap class cont
 Have `nltk` and `scipy` installed.
 
     python3 main.py
+
+It will print the results on stdout.

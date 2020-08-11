@@ -15,6 +15,15 @@ nltk.download('wordnet')
 if not os.path.exists('output'):
     os.mkdir('output')
 
+"""
+NOTES: This is work in progress
+
+* It takes ~2min using BETA_ITERATIONS=150
+* It currently does not find meaningful solutions with 1000 reviews
+* I don't understand alpha/mu/sigma initialization (dirichlet distribution and
+  the paper does not specify)
+* The paper says alpha is 0 <= a <= 1 but this is not the case here
+"""
 
 # reader = ReadData()
 # reader.readAspectSeedWords()

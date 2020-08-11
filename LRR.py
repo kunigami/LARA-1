@@ -6,7 +6,7 @@ import logging
 
 modelDataDir = "modelData/"
 
-BETA_ITERATIONS = 15
+BETA_ITERATIONS = 150
 # For floating point comparison
 EPS = 0.0001
 
@@ -239,26 +239,26 @@ class LRR:
         self.logger.info("Beta converged? : %s", 'yes' if converged else 'no')
         return beta.reshape((self.aspect_cnt, self.words_cnt)), converged
 
+    # NOTE: return the -1* of Eq. 6 because we're using a minimization solver (fmin_l_bfgs_b) but
+    # we want the maximum.
     def maximumLikelihoodAlpha(self, x, *args):
-        alpha_d = x
-        alpha_d = alpha_d.reshape((self.aspect_cnt, 1))
+        alpha_d = x.reshape((self.aspect_cnt, 1))
         rd, Sd, deltasq, mu, sigmaInv = args
-        temp1 = rd - np.dot(alpha_d.transpose(), Sd)[0][0]
-        temp1 *= temp1
-        temp1 /= deltasq * 2
+        term1 = (
+            rd - self.calc_overall_rating(x, Sd.reshape(self.aspect_cnt, ))
+        )**2 / (deltasq * 2)
+
         temp2 = alpha_d - mu
-        temp2 = np.dot(np.dot(temp2.transpose(), sigmaInv), temp2)[0][0]
-        temp2 /= 2
-        return temp1 + temp2
+        term2 = np.dot(np.dot(temp2.transpose(), sigmaInv), temp2)[0][0] / 2
+        return term1 + term2
 
     def gradAlpha(self, x, *args):
         alpha_d = x
         alpha_d = alpha_d.reshape((self.aspect_cnt, 1))
         rd, Sd, deltasq, mu, sigmaInv = args
-        temp1 = (np.dot(alpha_d.transpose(), Sd)[0][0] - rd) * Sd
-        temp1 /= deltasq
-        temp2 = np.dot(sigmaInv, (alpha_d - mu))
-        return (temp1 + temp2).reshape((self.aspect_cnt,))
+        term1 = (self.calc_overall_rating(x, Sd.reshape(self.aspect_cnt, )) - rd) * Sd / deltasq
+        term2 = np.dot(sigmaInv, (alpha_d - mu))
+        return (term1 + term2).reshape((self.aspect_cnt,))
 
     def calc_alpha_d(self, i):
         alpha_d = self.alpha[:, i].reshape((self.aspect_cnt, 1))
@@ -353,13 +353,10 @@ class LRR:
         self.calc_sigma()
         self.logger.info("Sigma calculated : %s " % np.linalg.det(self.sigma))
 
-        self.logger.info("alpha_likelihood calculated")
-
         beta, converged = self.calcBeta()
         if converged:
             self.beta = beta
         self.logger.info("Beta calculated")
-        self.logger.info("dataLikelihood calculated")
 
         self.delta_sq = self.calc_delta_square()
         self.logger.info("Deltasq calculated")

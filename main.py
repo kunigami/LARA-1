@@ -42,7 +42,6 @@ NOTES: This is work in progress
 
 # assert len(bootstrap.reviewIdList) > 0, 'ratings list must not be empty'
 # bootstrap.saveToFile("reviewIdList.json", bootstrap.reviewIdList)
-
 # bootstrap.saveToFile("vocab.json", list(bootstrap.corpus.wordFreq.keys()))
 # bootstrap.saveToFile("aspectKeywords.json", bootstrap.corpus.aspectKeywords)
 

@@ -23,6 +23,7 @@ NOTES: This is work in progress
 * I don't understand alpha/mu/sigma initialization (dirichlet distribution and
   the paper does not specify)
 * The paper says alpha is 0 <= a <= 1 but this is not the case here
+* I don't understand how the (log)-likelihood is being calculated
 """
 
 # reader = ReadData()

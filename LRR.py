@@ -6,11 +6,7 @@ import logging
 
 modelDataDir = "modelData/"
 
-<<<<<<< HEAD
 BETA_ITERATIONS = 150
-=======
-BETA_ITERATIONS = 15
->>>>>>> bdf4d61f67388a581d77333641176c76f8892382
 # For floating point comparison
 EPS = 0.0001
 
@@ -246,7 +242,6 @@ class LRR:
     # NOTE: return the -1* of Eq. 6 because we're using a minimization solver (fmin_l_bfgs_b) but
     # we want the maximum.
     def maximumLikelihoodAlpha(self, x, *args):
-<<<<<<< HEAD
         alpha_d = x.reshape((self.aspect_cnt, 1))
         rd, Sd, deltasq, mu, sigmaInv = args
         term1 = (
@@ -256,33 +251,14 @@ class LRR:
         temp2 = alpha_d - mu
         term2 = np.dot(np.dot(temp2.transpose(), sigmaInv), temp2)[0][0] / 2
         return term1 + term2
-=======
-        alpha_d = x
-        alpha_d = alpha_d.reshape((self.aspect_cnt, 1))
-        rd, Sd, deltasq, mu, sigmaInv = args
-        temp1 = rd - np.dot(alpha_d.transpose(), Sd)[0][0]
-        temp1 *= temp1
-        temp1 /= deltasq * 2
-        temp2 = alpha_d - mu
-        temp2 = np.dot(np.dot(temp2.transpose(), sigmaInv), temp2)[0][0]
-        temp2 /= 2
-        return temp1 + temp2
->>>>>>> bdf4d61f67388a581d77333641176c76f8892382
 
     def gradAlpha(self, x, *args):
         alpha_d = x
         alpha_d = alpha_d.reshape((self.aspect_cnt, 1))
         rd, Sd, deltasq, mu, sigmaInv = args
-<<<<<<< HEAD
         term1 = (self.calc_overall_rating(x, Sd.reshape(self.aspect_cnt, )) - rd) * Sd / deltasq
         term2 = np.dot(sigmaInv, (alpha_d - mu))
         return (term1 + term2).reshape((self.aspect_cnt,))
-=======
-        temp1 = (np.dot(alpha_d.transpose(), Sd)[0][0] - rd) * Sd
-        temp1 /= deltasq
-        temp2 = np.dot(sigmaInv, (alpha_d - mu))
-        return (temp1 + temp2).reshape((self.aspect_cnt,))
->>>>>>> bdf4d61f67388a581d77333641176c76f8892382
 
     def calc_alpha_d(self, i):
         alpha_d = self.alpha[:, i].reshape((self.aspect_cnt, 1))

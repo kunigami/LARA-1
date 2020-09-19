@@ -4,6 +4,8 @@ import json
 import random
 import logging
 
+from typing import List, Dict, Optional, Tuple
+
 modelDataDir = "modelData/"
 
 # BETA_ITERATIONS = 150000
@@ -20,92 +22,77 @@ PI = 0.5
 # Typical values for factr are:
 # 1e12 for low accuracy; 1e7 for moderate accuracy; 10.0 for extremely high accuracy.
 
+t_aspect = str
+t_word = str
+
+class ModelParams():
+
+    # mean parameter for the Gaussian distribution for the aspect weights alpha (aspects X 1)
+    mu: List[float]
+    # sigma - variance parameter for the Gaussian distribution (aspects x aspects)
+    sigma: Any
+    # cache of sigma^{-1}
+    sigma_inv: Any
+    # delta^2 should be the variance of normal dist rd is draw from
+    # represent uncertainty of overall rating predictions
+    delta: float
+    # matrix Beta for the whole corpus (for all aspects, for all words)  [aspects X words]
+    # beta is word sentiment polarity on that aspect
+    beta: Any
+
+    def __init__(self, aspect_cnt: int):
+        self.delta = 1.0
+
+        # self.mu = np.random.dirichlet(np.ones(aspect_cnt), size=1).reshape(aspect_cnt, 1)
+        self.mu = np.random.uniform(low=-1., high=1., size=(aspect_cnt, 1))
+
+        self.beta = np.random.uniform(low=-0.1, high=0.1, size=(self.aspect_cnt, self.words_cnt()))
+
+        self.set_sigma(np.eye(aspect_cnt))
+
+    def set_sigma(self, sigma):
+        self.sigma = sigma
+        self.sigma_inv = np.linalg.inv(self.sigma)
+
 class LRR():
-    def __init__(self, should_assert=False):
+
+    lambda_param: float
+    should_assert: bool
+    word_index_mapping:  Dict[str, int]
+    aspect_index_mapping: Dict[t_aspect, int]
+    word_correlation_by_aspect: List[Dict[t_aspect, Dict[t_word, int]]]
+    aspect_ratings: List[Dict[t_aspect, int]]
+    reviews_ids: List[str]
+    params: ModelParams
+
+    def __init__(self, should_assert: bool=False):
         random.seed(0)
 
         self.lambda_param = LAMBDA
         self.should_assert = should_assert
 
-        words = self.loadDataFromFile("vocab.json")
-        self.word_index_mapping = self.createWordIndexMapping(words)
-        self.words_cnt = len(self.word_index_mapping)
+        self.initialize_input_from_file()
 
-        # Maps aspects to related keywords
-        aspectKeywords = self.loadDataFromFile("aspectKeywords.json")
-        self.aspect_index_mapping = self.createAspectIndexMapping(aspectKeywords)
-        self.aspect_cnt = len(self.aspect_index_mapping)
+        [self.train_indices, self.test_indices] = self.split_reviews_into_training_and_test(self.reviews_cnt)
 
-        # Histogram of words for each review and aspect
-        self.wList = self.loadDataFromFile("wList.json")
-
-        # List of ratings for each aspect belonging to a review ([reviews X aspects])
-        self.aspect_ratings = self.loadDataFromFile("ratingsList.json")
-
-        # List of review IDs
-        self.reviews_ids = self.loadDataFromFile("reviewIdList.json")
-        self.reviews_cnt = len(self.reviews_ids)
-        assert self.reviews_cnt > 0, "Reviews should exist in reviewIdList.json"
-
-        # breaking dataset into 3:1 ratio, 3 parts for training and 1 for testing
-        self.train_indices = random.sample(range(0, self.reviews_cnt), int(0.75 * self.reviews_cnt))
-        self.test_indices = list(set(range(0, self.reviews_cnt)) - set(self.train_indices))
-
-        self.train_reviews_cnt = len(self.train_indices)
-
-        # delta - is simply a number
-        # delta_sq should be the variance of normal dist rd is draw from
-        # represent uncertainty of overall rating predictions
-        self.delta_sq = 1.0
-
-        # predefined confidence parameter to control L_aux influence
-        # pi should be much smaller than 1/delta_sq
-        self.pi = PI
+        self.params = ModelParams(self.aspect_cnt())
 
         # matrix of aspect rating vectors (Sd) of all reviews - [aspects X reviews]
         # Aspect weight vector
-        self.S = np.empty(shape=(self.aspect_cnt, self.train_reviews_cnt), dtype=np.float64)
-        print(self.S)
-
-        # mean parameter for the Gaussian distribution for the aspect weights alpha (aspects X 1)
-        self.mu = np.random.dirichlet(np.ones(self.aspect_cnt), size=1).reshape(self.aspect_cnt, 1)
-        self.mu = np.random.uniform(low=-1., high=1., size=(self.aspect_cnt, 1))
-
-        # matrix Beta for the whole corpus (for all aspects, for all words) - k*n matrix
-        # beta is word sentiment polarity on that aspect
-        self.beta = np.random.uniform(low=-0.1, high=0.1, size=(self.aspect_cnt, self.words_cnt))
+        self.S = np.empty(shape=(self.aspect_cnt, self.training_size()), dtype=np.float64)
 
         self.Wd = []
         for d in range(self.reviews_cnt):
-            self.Wd.append(self.createWMatrix(self.wList[d]))
+            self.Wd.append(self.createWMatrix(self.word_correlation_by_aspect[d]))
         if should_assert:
             assert_words_matrix(self.Wd, reviews_cnt=self.reviews_cnt, aspect_cnt=self.aspect_cnt)
-
-        # matrix sigma for the whole corpus - k*k matrix
-        # Sigma needs to be positive definite, with diagonal elems positive
-        """self.delta_sqigma = np.random.uniform(low=-1.0, high=1.0, size=(self.aspect_cnt, self.aspect_cnt))
-        self.sigma = np.dot(self.sigma, self.sigma.transpose())
-        print(self.sigma.shape, self.sigma)
-        """
-
-        # sigma - variance parameter for the Gaussian distribution (k x k)
-
-        # Following is help taken from:
-        # https://stats.stackexchange.com/questions/124538/
-        W = np.random.randn(self.aspect_cnt, self.aspect_cnt - 1)
-        S = np.add(np.dot(W, W.transpose()), np.diag(np.random.rand(self.aspect_cnt)))
-        D = np.diag(np.reciprocal(np.sqrt(np.diagonal(S))))
-        self.sigma = np.dot(D, np.dot(S, D))
-        self.sigma = np.eye(self.aspect_cnt)
-        self.sigmaInv = np.linalg.inv(self.sigma)
-
 
                 # matrix of alphas (Alpha-d) of all reviews - [reviews X aspects]
         # each column represents Aplha-d aspect rating vector for a review
         self.alpha_hat = np.random.multivariate_normal(mean=self.mu.reshape(self.aspect_cnt, ), cov=self.sigma, size=1).reshape(self.aspect_cnt, 1)
         self.alpha = np.exp(self.alpha_hat) / (np.sum(np.exp(self.alpha_hat)))
 
-        for d in range(self.train_reviews_cnt - 1):
+        for d in range(self.training_size() - 1):
             alpha_hat_add = np.random.multivariate_normal(mean=self.mu.reshape(self.aspect_cnt, ), cov=self.sigma, size=1).reshape(self.aspect_cnt, 1)
             self.alpha_hat = np.hstack(
                 (
@@ -121,26 +108,6 @@ class LRR():
                 )
             )
 
-#         self.alpha_hat = np.random.dirichlet(np.ones(self.aspect_cnt), size=1).reshape(self.aspect_cnt, 1)
-#         self.alpha = np.exp(self.alpha_hat) / (np.sum(np.exp(self.alpha_hat)))
-
-#         for d in range(self.train_reviews_cnt - 1):
-#             self.alpha_hat = np.hstack(
-#                 (
-#                     self.alpha_hat,
-#                     np.random.dirichlet(np.ones(self.aspect_cnt), size=1).reshape(self.aspect_cnt, 1)
-#                 )
-#             )
-
-#             self.alpha = np.hstack(
-#                 (
-#                     self.alpha,
-#                     (np.exp(self.alpha_hat[:, d+1]) / np.sum(np.exp(self.alpha_hat[:, d+1]))).reshape(self.aspect_cnt, 1)
-#                      ,
-#                 )
-#             )
-
-        print('initial alphah', self.alpha_hat)
 
         if self.should_assert:
             assert_alpha(self.alpha)
@@ -152,6 +119,33 @@ class LRR():
         """
         self.setup_logger()
 
+    def initialize_input_from_file(self):
+        words = self.load_words()
+        self.word_index_mapping = self.create_word_index_mapping(words)
+
+        # Maps aspects to related keywords
+        aspect_keywords = self.load_aspect_keywords()
+        self.aspect_index_mapping = self.create_aspect_index_mapping(aspect_keywords)
+        self.aspect_cnt = len(self.aspect_index_mapping)
+
+        # Histogram of words for each review and aspect
+        self.word_correlation_by_aspect = self.load_word_correlation_by_aspect()
+
+        # List of ratings for each aspect belonging to a review, s_d ([reviews X aspects])
+        self.aspect_ratings = self.load_aspect_ratings()
+
+        # List of review IDs
+        self.reviews_ids = self.load_reviews_ids()
+        self.reviews_cnt = len(self.reviews_ids)
+
+    # breaking dataset into 3:1 ratio, 3 parts for training and 1 for testing
+    def split_reviews_into_training_and_test(self, reviews_cnt: int) -> Tuple[List[int], List[int]]:
+        train_indices = random.sample(range(0, reviews_cnt), int(0.75 * reviews_cnt))
+        test_indices = list(set(range(0, reviews_cnt)) - set(train_indices))
+        return (train_indices, test_indices)
+
+    def training_size(self) -> int:
+        return len(self.train_indices)
 
     def setup_logger(self):
         self.logger = logging.getLogger("LRR")
@@ -162,30 +156,17 @@ class LRR():
         fh.setFormatter(formatter)
         self.logger.addHandler(fh)
 
-    def createWordIndexMapping(self, words):
-        word_index_mapping = {}
-        for i in range(len(words)):
-            word_index_mapping[words[i]] = i
-        return word_index_mapping
-
-    def createAspectIndexMapping(self, aspect_keywords):
-        aspect_index_mapping = {}
-        aspects = list(aspect_keywords.keys())
-        for i in range(len(aspects)):
-            aspect_index_mapping[aspects[i]] = i
-        return aspect_index_mapping
-
     def loadDataFromFile(self, fileName):
         json_data = None
         with open(modelDataDir + fileName, "r") as fp:
             json_data = json.load(fp)
         return json_data
 
-    # given a dictionary as in every index of self.wList,
+    # given a dictionary as in every index of self.word_correlation_by_aspect,
     #
     # creates a W matrix as was in the paper
     def createWMatrix(self, histo_by_aspect):
-        W = np.zeros(shape=(self.aspect_cnt, self.words_cnt))
+        W = np.zeros(shape=(self.aspect_cnt, self.words_cnt()))
         for aspect, cnt_by_words in histo_by_aspect.items():
             total_count = sum(cnt_by_words.values())
             for word, cnt in cnt_by_words.items():
@@ -205,19 +186,19 @@ class LRR():
     # calculates mu for (t+1)th iteration. Eq. 8 in the paper.
     def calc_mu(self):
         # FIXME
-        return np.sum(self.alpha_hat, axis=1).reshape((self.aspect_cnt, 1)) / self.train_reviews_cnt
-        # return np.sum(self.alpha, axis=1).reshape((self.aspect_cnt, 1)) / self.train_reviews_cnt
+        return np.sum(self.alpha_hat, axis=1).reshape((self.aspect_cnt, 1)) / self.training_size()
+        # return np.sum(self.alpha, axis=1).reshape((self.aspect_cnt, 1)) / self.training_size()
 
     # calculates sigma for (t+1)th iteration. Eq. 9 in the paper.
     def calc_sigma(self):
         self.sigma.fill(0)
-        for d in range(self.train_reviews_cnt):
+        for d in range(self.training_size()):
             alpha_aspects = self.alpha[:, d].reshape((self.aspect_cnt, 1))
             alpha_aspects = alpha_aspects - self.mu
             self.sigma = self.sigma + np.dot(alpha_aspects, alpha_aspects.transpose())
 
         for k in range(self.aspect_cnt):
-            self.sigma[k][k] = (1.0 + self.sigma[k][k]) / (1.0 + self.train_reviews_cnt)
+            self.sigma[k][k] = (1.0 + self.sigma[k][k]) / (1.0 + self.training_size())
 
         self.sigmaInv = np.linalg.inv(self.sigma)
 
@@ -227,13 +208,13 @@ class LRR():
     # calculates delta square for (t+1)th iteration. Eq. 10 in the paper.
     def calc_delta_square(self):
         delta = 0.0
-        for d in range(self.train_reviews_cnt):
+        for d in range(self.training_size()):
             rd = float(self.aspect_ratings[self.train_indices[d]]["Overall"])
 
             alpha_d = self.alpha[:, d].reshape((self.aspect_cnt,))
             Sd = self.S[:, d].reshape((self.aspect_cnt,))
             delta += (rd - self.calc_overall_rating(alpha_d, Sd))**2
-        return delta / self.train_reviews_cnt
+        return delta / self.training_size()
 
     def maximumLikelihoodBeta(self, x, *args):
         return maximum_likelihood_beta(
@@ -246,7 +227,7 @@ class LRR():
             train_indices=self.train_indices,
             Wd=self.Wd,
             S=self.S,
-            words_cnt=self.words_cnt
+            words_cnt=self.words_cnt()
         )
 
     def gradBeta(self, x, *args):
@@ -260,7 +241,7 @@ class LRR():
             train_indices=self.train_indices,
             Wd=self.Wd,
             S=self.S,
-            words_cnt=self.words_cnt
+            words_cnt=self.words_cnt()
         )
 
     def calcBeta(self):
@@ -277,7 +258,7 @@ class LRR():
         if flags["warnflag"] != 0:
             converged = False
         self.logger.info("Beta converged? : %s", 'yes' if converged else 'no')
-        return beta.reshape((self.aspect_cnt, self.words_cnt)), converged
+        return beta.reshape((self.aspect_cnt, self.words_cnt())), converged
 
 
     def maximumLikelihoodAlphaHat(self, x, *args):
@@ -285,6 +266,7 @@ class LRR():
         # FIXME: alpha_d_hat is too big
         print('exp alpha', np.exp(alpha_d_hat))
         alpha_d = (np.exp(alpha_d_hat) / np.sum(np.exp(alpha_d_hat))).reshape(self.aspect_cnt, )
+        print('alpha', alpha_d)
         rd, Sd, deltasq, mu, sigmaInv, pi = args
 
         term1 = np.einsum('i,i->', alpha_d.reshape(self.aspect_cnt, ), Sd.reshape(self.aspect_cnt, )) - rd
@@ -293,8 +275,8 @@ class LRR():
         term2 = -1 * self.pi * np.einsum('i,i->', alpha_d, np.square(Sd.reshape(self.aspect_cnt, ) - rd))
         temp3 = alpha_d_hat - mu
         term3 = -1 * np.dot(np.dot(temp3.transpose(), sigmaInv), temp3)[0][0]
-        print('maximumLikelihoodAlphaHat', term1 + term2 + term3)
-        return term1 + term2 + term3
+        # print('maximumLikelihoodAlphaHat', term1 + term2 + term3)
+        return (term1 + term2 + term3)
 
     def gradAlphaHat(self, x, *args):
         alpha_d_hat = x.reshape((self.aspect_cnt, 1))
@@ -326,11 +308,13 @@ class LRR():
         assert term1.shape == term2.shape
         assert term2.shape == term3.shape
         all_terms = term1 + term2 + term3
-        print('~ grad alpha ~')
-        print('alphah', alpha_d_hat.reshape(self.aspect_cnt, ))
-        print('mu', mu.reshape(self.aspect_cnt, ))
-        print('alphah - mu', alpha_d_hat.reshape(self.aspect_cnt, ) - mu.reshape(self.aspect_cnt, ))
-        return all_terms
+
+        # print('~ grad alpha ~')
+        # print('alphah', alpha_d_hat.reshape(self.aspect_cnt, ))
+        # print('mu', mu.reshape(self.aspect_cnt, ))
+        # print('alphah - mu', alpha_d_hat.reshape(self.aspect_cnt, ) - mu.reshape(self.aspect_cnt, ))
+        # print('grad result ===> ', all_terms)
+        return -all_terms
 
     def calc_alpha_d_hat(self, d):
         alpha_d_hat = self.alpha_hat[:, d].reshape((self.aspect_cnt, 1))
@@ -366,7 +350,7 @@ class LRR():
 
     def dataLikelihood(self):
         likelihood = 0.0
-        for d in range(self.train_reviews_cnt):
+        for d in range(self.training_size()):
             review_idx = self.train_indices[d]
             Rd = float(self.aspect_ratings[review_idx]["Overall"])
             Sd = self.S[:, d].reshape((self.aspect_cnt,))
@@ -380,7 +364,7 @@ class LRR():
 
     def alpha_likelihood(self):
         likelihood = 0.0
-        for d in range(self.train_reviews_cnt):
+        for d in range(self.training_size()):
 #             alpha_d = self.alpha[:, d].reshape((self.aspect_cnt, 1))
             alpha_d_hat = self.alpha_hat[:, d].reshape((self.aspect_cnt, 1))
             temp2 = alpha_d_hat - self.mu
@@ -396,7 +380,7 @@ class LRR():
 
     def aux_likelihood(self):
         likelihood = 0.0
-        for d in range(self.train_reviews_cnt):
+        for d in range(self.training_size()):
             alpha_d = self.alpha[:, d].reshape((self.aspect_cnt, 1))
             review_idx = self.train_indices[d]
             rd = float(self.aspect_ratings[review_idx]["Overall"])
@@ -416,7 +400,7 @@ class LRR():
 
     # Expectation calculation step
     def EStep(self):
-        for d in range(self.train_reviews_cnt):
+        for d in range(self.training_size()):
             review_idx = self.train_indices[d]
             W = self.Wd[review_idx]
             self.S[:, d] = self.calc_aspect_ratings(W)
@@ -477,10 +461,62 @@ class LRR():
 
         self.logger.info("Training completed")
 
+    def load_words(self) -> List[str]:
+        return self.loadDataFromFile("vocab.json")
+
+    def create_word_index_mapping(self, words: List[str]) -> Dict[str, int]:
+        word_index_mapping = {}
+        for i in range(len(words)):
+            word_index_mapping[words[i]] = i
+        return word_index_mapping
+
+    def words_cnt(self):
+        return len(self.word_index_mapping)
+
+    def load_aspect_keywords(self) -> Dict[str, List[str]]:
+        return self.loadDataFromFile("aspectKeywords.json")
+
+    def create_aspect_index_mapping(self, aspect_keywords: Dict[str, List[str]]) -> Dict[str, int]:
+        aspect_index_mapping = {}
+        aspects = list(aspect_keywords.keys())
+        for i in range(len(aspects)):
+            aspect_index_mapping[aspects[i]] = i
+        return aspect_index_mapping
+
+    def aspect_cnt() -> int:
+        return len(self.aspect_index_mapping)
+
+    def load_word_correlation_by_aspect(self) -> List[Dict[str, Dict[str, int]]]:
+        return self.loadDataFromFile("wList.json")
+
+    def load_aspect_ratings(self) -> List[Dict[t_aspect, int]]:
+        aspect_ratings = self.loadDataFromFile("ratingsList.json")
+        aspect_ratings_norm = []
+        for aspect_rating in aspect_ratings:
+            aspect_rating_norm = self.normalize_aspect_rating(aspect_rating)
+            if aspect_rating_norm is None:
+                continue
+            aspect_ratings_norm.append(aspect_rating_norm)
+        return aspect_ratings_norm
+
+    def normalize_aspect_rating(self, aspect_rating) -> Optional[Dict[t_aspect, int]]:
+        aspect_rating_norm = {}
+        for aspect, rating in aspect_rating.items():
+            rating_norm = int(rating)
+            if rating_norm < 0:
+                return None
+            aspect_rating_norm[aspect.lower()] = rating_norm
+        return aspect_rating_norm
+
+    def load_reviews_ids(self) -> List[str]:
+        reviews_ids = self.loadDataFromFile("reviewIdList.json")
+        assert len(reviews_ids) > 0, "Reviews should exist in reviewIdList.json"
+        return reviews_ids
+
     def testing(self):
         mu = self.mu.reshape((self.aspect_cnt,))
         for i in range(10):
-            # self.reviews_cnt - self.train_reviews_cnt):
+            # self.reviews_cnt - self.training_size()):
             review_idx = self.test_indices[i]
             W = self.Wd[review_idx]
             Sd = self.calc_aspect_ratings(W).reshape((self.aspect_cnt,))

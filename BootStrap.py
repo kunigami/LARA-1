@@ -5,6 +5,8 @@ from collections import defaultdict
 from nltk import FreqDist
 import numpy as np
 
+from typing import Any, List, Dict, Optional, Tuple
+
 modelDataDir = "modelData/"
 
 class BootStrap:
@@ -119,11 +121,29 @@ class BootStrap:
                 if len(sentence.assignedAspect)==1:
                     for word,freq in sentence.wordFreqDict.items():
                         W[sentence.assignedAspect[0]][word]+=freq
-            if len(W)!=0:
-                self.wList.append(W)
-                self.ratingsList.append(review.ratings)
-                self.reviewIdList.append(review.reviewId)
 
+            if len(W) == 0:
+                continue
+
+
+            aspect_rating_norm = self.normalize_aspect_rating(review.ratings)
+            if aspect_rating_norm is None:
+                continue
+
+            print(aspect_rating_norm)
+
+            self.wList.append(W)
+            self.ratingsList.append(aspect_rating_norm)
+            self.reviewIdList.append(review.reviewId)
+
+    def normalize_aspect_rating(self, aspect_rating) -> Optional[Dict[str, float]]:
+        aspect_rating_norm = {}
+        for aspect, rating in aspect_rating.items():
+            rating_norm = float(rating)
+            if rating_norm < 0:
+                return None
+            aspect_rating_norm[aspect.lower()] = rating_norm
+        return aspect_rating_norm
 
     def bootStrap(self):
         changed=True

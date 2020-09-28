@@ -4,7 +4,7 @@ import json
 import random
 import logging
 
-from typing import List, Dict, Optional, Tuple
+from typing import Any, List, Dict, Optional, Tuple
 
 modelDataDir = "modelData/"
 
@@ -13,7 +13,7 @@ modelDataDir = "modelData/"
 EPS = 0.0001
 
 BETA_ITERATIONS = 500
-ALPHA_ITERATIONS = 1500
+ALPHA_ITERATIONS = 10
 # For floating point comparison
 LAMBDA = 2 # regularization parameter for beta
 BETA_FCTR = 1e12
@@ -35,18 +35,18 @@ class ModelParams():
     sigma_inv: Any
     # delta^2 should be the variance of normal dist rd is draw from
     # represent uncertainty of overall rating predictions
-    delta: float
+    delta_sq: float
     # matrix Beta for the whole corpus (for all aspects, for all words)  [aspects X words]
     # beta is word sentiment polarity on that aspect
     beta: Any
 
-    def __init__(self, aspect_cnt: int):
-        self.delta = 1.0
+    def __init__(self, aspect_cnt: int, words_cnt: int):
+        self.delta_sq = 1.0
 
         # self.mu = np.random.dirichlet(np.ones(aspect_cnt), size=1).reshape(aspect_cnt, 1)
         self.mu = np.random.uniform(low=-1., high=1., size=(aspect_cnt, 1))
 
-        self.beta = np.random.uniform(low=-0.1, high=0.1, size=(self.aspect_cnt, self.words_cnt()))
+        self.beta = np.random.uniform(low=-0.1, high=0.1, size=(aspect_cnt, words_cnt))
 
         self.set_sigma(np.eye(aspect_cnt))
 
@@ -61,9 +61,11 @@ class LRR():
     word_index_mapping:  Dict[str, int]
     aspect_index_mapping: Dict[t_aspect, int]
     word_correlation_by_aspect: List[Dict[t_aspect, Dict[t_word, int]]]
-    aspect_ratings: List[Dict[t_aspect, int]]
+    aspect_ratings: List[Dict[t_aspect, float]]
     reviews_ids: List[str]
     params: ModelParams
+    # reviews_cnt X aspect_cnt matrix
+    alpha: List[float]
 
     def __init__(self, should_assert: bool=False):
         random.seed(0)
@@ -75,7 +77,7 @@ class LRR():
 
         [self.train_indices, self.test_indices] = self.split_reviews_into_training_and_test(self.reviews_cnt)
 
-        self.params = ModelParams(self.aspect_cnt())
+        self.params = ModelParams(self.aspect_cnt, self.words_cnt())
 
         # matrix of aspect rating vectors (Sd) of all reviews - [aspects X reviews]
         # Aspect weight vector
@@ -87,27 +89,9 @@ class LRR():
         if should_assert:
             assert_words_matrix(self.Wd, reviews_cnt=self.reviews_cnt, aspect_cnt=self.aspect_cnt)
 
-                # matrix of alphas (Alpha-d) of all reviews - [reviews X aspects]
-        # each column represents Aplha-d aspect rating vector for a review
-        self.alpha_hat = np.random.multivariate_normal(mean=self.mu.reshape(self.aspect_cnt, ), cov=self.sigma, size=1).reshape(self.aspect_cnt, 1)
-        self.alpha = np.exp(self.alpha_hat) / (np.sum(np.exp(self.alpha_hat)))
-
-        for d in range(self.training_size() - 1):
-            alpha_hat_add = np.random.multivariate_normal(mean=self.mu.reshape(self.aspect_cnt, ), cov=self.sigma, size=1).reshape(self.aspect_cnt, 1)
-            self.alpha_hat = np.hstack(
-                (
-                    self.alpha_hat,
-                    alpha_hat_add,
-                )
-            )
-
-            self.alpha = np.hstack(
-                (
-                    self.alpha,
-                    (np.exp(alpha_hat_add) / np.sum(np.exp(alpha_hat_add))).reshape(self.aspect_cnt, 1)
-                )
-            )
-
+        self.alpha = np.empty(shape=(self.training_size(), self.aspect_cnt))
+        for d in range(self.training_size()):
+            self.alpha[d] = np.ones(self.aspect_cnt)/self.aspect_cnt
 
         if self.should_assert:
             assert_alpha(self.alpha)
@@ -175,10 +159,10 @@ class LRR():
                 W[aspect_index][word_index] = 1.0 * cnt / total_count
         return W
 
-    # Computing aspectRating array for each review given Wd->W matrix for review 'd'
-    def calc_aspect_ratings(self, Wd):
+    # Computing aspectRating array for a review given Wd->W matrix for review 'd'
+    def calc_aspect_ratings_for_review(self, Wd):
         # Inner product over words
-        Sd = np.einsum("ij,ij->i", self.beta, Wd).reshape((self.aspect_cnt,))
+        Sd = np.einsum("ij,ij->i", self.params.beta, Wd).reshape((self.aspect_cnt,))
         Sd = np.exp(Sd)
         print(Sd)
         return Sd
@@ -261,76 +245,57 @@ class LRR():
         return beta.reshape((self.aspect_cnt, self.words_cnt())), converged
 
 
-    def maximumLikelihoodAlphaHat(self, x, *args):
-        alpha_d_hat = x.reshape((self.aspect_cnt, 1))
-        # FIXME: alpha_d_hat is too big
-        print('exp alpha', np.exp(alpha_d_hat))
-        alpha_d = (np.exp(alpha_d_hat) / np.sum(np.exp(alpha_d_hat))).reshape(self.aspect_cnt, )
-        print('alpha', alpha_d)
-        rd, Sd, deltasq, mu, sigmaInv, pi = args
+    def alpha_likelihood(self, curr_solution, *args):
+        rd, sd, deltasq, mu, sigma_inv = args
 
-        term1 = np.einsum('i,i->', alpha_d.reshape(self.aspect_cnt, ), Sd.reshape(self.aspect_cnt, )) - rd
-        term1 /= deltasq
-        term1 = -1 * term1 * term1
-        term2 = -1 * self.pi * np.einsum('i,i->', alpha_d, np.square(Sd.reshape(self.aspect_cnt, ) - rd))
-        temp3 = alpha_d_hat - mu
-        term3 = -1 * np.dot(np.dot(temp3.transpose(), sigmaInv), temp3)[0][0]
-        # print('maximumLikelihoodAlphaHat', term1 + term2 + term3)
-        return (term1 + term2 + term3)
+        alpha_d = curr_solution.reshape((self.aspect_cnt, 1))
 
-    def gradAlphaHat(self, x, *args):
-        alpha_d_hat = x.reshape((self.aspect_cnt, 1))
-        alpha_d = np.exp(alpha_d_hat) / np.sum(np.exp(alpha_d_hat))
-        rd, Sd, deltasq, mu, sigmaInv, pi = args
+        # alpha_d^T s_d
+        term1 = np.einsum('i,i->', alpha_d.reshape(self.aspect_cnt, ), sd.reshape(self.aspect_cnt, ))
+        # print('sd', sd)
+        # print('alpha_d', alpha_d)
+        # print('term1', term1)
+        term1 = - (rd - term1)**2 / (2*deltasq)
 
-        off_diag_terms = Sd * alpha_d
-        off_diag_sum = np.sum(off_diag_terms)
+        term2 = alpha_d - mu
+        term2 = -1 * np.dot(np.dot(term2.transpose(), sigma_inv), term2)[0][0]
+        # print('alpha_likelihood', term1 + term2)
+        return term1 + term2
 
-        off_diag_sq_terms = np.square(Sd - rd) * alpha_d
-        off_diag_sq_sum = np.sum(off_diag_sq_terms)
+    def alpha_likelihood_gradient(self, curr_solution, *args):
+        rd, sd, deltasq, mu, sigma_inv = args
+        alpha_d = curr_solution.reshape((self.aspect_cnt, 1))
 
-        sumterm1 = Sd * (1 - alpha_d) - off_diag_sum + off_diag_terms
+        # alpha_d^T s_d
+        term1 = np.einsum('i,i->', alpha_d.reshape(self.aspect_cnt, ), sd.reshape(self.aspect_cnt, ))
+        term1 = - (rd - term1)*sd / (deltasq)
 
-        sumterm2 = np.square(Sd - rd) * (1 - alpha_d) - off_diag_sq_sum + off_diag_sq_terms
-        dasda = alpha_d * sumterm1
+        term2 = - np.dot(sigma_inv, alpha_d - mu)
 
-        term1 = np.einsum('i,i->', alpha_d.reshape(self.aspect_cnt, ), Sd.reshape(self.aspect_cnt, )) - rd
-        term1 = -((2 * term1 * dasda) / deltasq).reshape((self.aspect_cnt,))
+        gradient = term1 + term2
+        print('grad', gradient)
+        return gradient.reshape(self.aspect_cnt, )
 
-        term2 = (-pi * alpha_d * sumterm2).reshape((self.aspect_cnt,))
-
-        term3 = -2 * np.einsum(
-            'ij,j->i',
-            self.sigmaInv,
-            alpha_d_hat.reshape(self.aspect_cnt, ) - mu.reshape(self.aspect_cnt, )
+    def calc_alpha_for_review(self, d: int):
+        alpha_d = self.alpha[d].reshape((self.aspect_cnt, 1))
+        review_idx = self.train_indices[d]
+        print(review_idx, len(self.aspect_ratings))
+        rd = float(self.aspect_ratings[review_idx]["overall"])
+        Sd = self.S[:, d].reshape((self.aspect_cnt, 1))
+        Args = (
+            rd,
+            Sd,
+            self.params.delta_sq,
+            self.params.mu,
+            self.params.sigma_inv
         )
 
-        assert term1.shape == term2.shape
-        assert term2.shape == term3.shape
-        all_terms = term1 + term2 + term3
-
-        # print('~ grad alpha ~')
-        # print('alphah', alpha_d_hat.reshape(self.aspect_cnt, ))
-        # print('mu', mu.reshape(self.aspect_cnt, ))
-        # print('alphah - mu', alpha_d_hat.reshape(self.aspect_cnt, ) - mu.reshape(self.aspect_cnt, ))
-        # print('grad result ===> ', all_terms)
-        return -all_terms
-
-    def calc_alpha_d_hat(self, d):
-        alpha_d_hat = self.alpha_hat[:, d].reshape((self.aspect_cnt, 1))
-        alpha_d = self.alpha[:, d].reshape((self.aspect_cnt, 1))
-        review_idx = self.train_indices[d]
-        rd = float(self.aspect_ratings[review_idx]["Overall"])
-        Sd = self.S[:, d].reshape((self.aspect_cnt, 1))
-        Args = (rd, Sd, self.delta_sq, self.mu, self.sigmaInv, self.pi)
-
-        print('alpha before opt >>>>', alpha_d_hat)
-        alpha_d_hat, retVal, flags = optimize.fmin_l_bfgs_b(
-            func=self.maximumLikelihoodAlphaHat,
-            x0=alpha_d_hat,
-            fprime=self.gradAlphaHat,
+        print('alpha_d', alpha_d)
+        alpha_d, retVal, flags = optimize.fmin_l_bfgs_b(
+            func=self.alpha_likelihood,
+            x0=alpha_d,
+            fprime=self.alpha_likelihood_gradient,
             args=Args,
-#             m=5,
             factr=ALPHA_FCTR,
             maxiter=ALPHA_ITERATIONS,
         )
@@ -338,11 +303,7 @@ class LRR():
         if flags["warnflag"] != 0:
             converged = False
 
-        # self.logger.info("Alpha converged? : %s", 'yes' if converged else 'no')
-        # Normalizing alpha_d so that it follows dirichlet distribution
-#         alpha_d = np.exp(alpha_d_hat) / (np.sum(np.exp(alpha_d_hat)))
-
-        return alpha_d_hat.reshape((self.aspect_cnt,)), converged
+        return alpha_d.reshape((self.aspect_cnt,)), converged
 
     def beta_likelihood(self):
         return -1.0 * self.lambda_param * np.sum(np.einsum('ij,ij->i',self.beta,self.beta))
@@ -354,29 +315,13 @@ class LRR():
             review_idx = self.train_indices[d]
             Rd = float(self.aspect_ratings[review_idx]["Overall"])
             Sd = self.S[:, d].reshape((self.aspect_cnt,))
-            alpha_d = self.alpha[:, d].reshape((self.aspect_cnt,))
+            alpha_d = self.alpha[d].reshape((self.aspect_cnt,))
             temp = (self.calc_overall_rating(alpha_d, Sd) - Rd) / self.delta_sq
             try:
                 likelihood += temp * temp
             except Exception:
                 self.logger.debug("Exception in dataLikelihood")
         return -1 * likelihood
-
-    def alpha_likelihood(self):
-        likelihood = 0.0
-        for d in range(self.training_size()):
-#             alpha_d = self.alpha[:, d].reshape((self.aspect_cnt, 1))
-            alpha_d_hat = self.alpha_hat[:, d].reshape((self.aspect_cnt, 1))
-            temp2 = alpha_d_hat - self.mu
-            temp2 = np.dot(np.dot(temp2.transpose(), self.sigmaInv), temp2)[0]
-            likelihood += temp2
-        try:
-            likelihood += np.log(np.linalg.det(self.sigma))
-        except FloatingPointError:
-            self.logger.debug(
-                "Exception in alpha_likelihood: %f", np.linalg.det(self.sigma)
-            )
-        return -1.0 * likelihood
 
     def aux_likelihood(self):
         likelihood = 0.0
@@ -398,20 +343,17 @@ class LRR():
             self.beta_likelihood() + \
             self.aux_likelihood()
 
-    # Expectation calculation step
-    def EStep(self):
+    def update_alpha(self):
         for d in range(self.training_size()):
             review_idx = self.train_indices[d]
             W = self.Wd[review_idx]
-            self.S[:, d] = self.calc_aspect_ratings(W)
-#             print(self.S[:, d])
+            self.S[:, d] = self.calc_aspect_ratings_for_review(W)
 
-            alpha_d_hat, converged = self.calc_alpha_d_hat(d)
+            alpha_d, converged = self.calc_alpha_for_review(d)
 
             if converged:
-                print('alpha updating >>>>', alpha_d_hat)
-                self.alpha_hat[:, d] = alpha_d_hat
-                self.alpha[:, d] = np.exp(alpha_d_hat) / np.sum(np.exp(alpha_d_hat))
+                print('alpha updating >>>>', alpha_d)
+                self.alpha[d] = alpha_d
             else:
                 print(f"alpha not converged for review {review_idx}")
 
@@ -434,16 +376,17 @@ class LRR():
         self.delta_sq = self.calc_delta_square()
         self.logger.info("Delta_sq calculated")
 
-    def EMAlgo(self, maxIter, covergence_threshold):
+    def solve(self, maxIter, covergence_threshold):
         self.logger.info("Training started")
+
         iteration = 0
-        # FIXME: fill in self.S
-        self.EStep()
+        self.update_alpha()
         old_likelihood = self.calc_likelihood()
+        return
 
         diff = np.Inf
         while (iteration < max(8, maxIter) and abs(diff) > covergence_threshold):
-            self.EStep()
+            self.update_alpha()
             self.logger.info("EStep completed")
 
             self.MStep()
@@ -489,20 +432,20 @@ class LRR():
     def load_word_correlation_by_aspect(self) -> List[Dict[str, Dict[str, int]]]:
         return self.loadDataFromFile("wList.json")
 
-    def load_aspect_ratings(self) -> List[Dict[t_aspect, int]]:
+    def load_aspect_ratings(self) -> List[Dict[t_aspect, float]]:
         aspect_ratings = self.loadDataFromFile("ratingsList.json")
         aspect_ratings_norm = []
         for aspect_rating in aspect_ratings:
             aspect_rating_norm = self.normalize_aspect_rating(aspect_rating)
             if aspect_rating_norm is None:
-                continue
+                raise Exception('Invalid aspect rating', aspect_rating)
             aspect_ratings_norm.append(aspect_rating_norm)
         return aspect_ratings_norm
 
-    def normalize_aspect_rating(self, aspect_rating) -> Optional[Dict[t_aspect, int]]:
+    def normalize_aspect_rating(self, aspect_rating) -> Optional[Dict[t_aspect, float]]:
         aspect_rating_norm = {}
         for aspect, rating in aspect_rating.items():
-            rating_norm = int(rating)
+            rating_norm = float(rating)
             if rating_norm < 0:
                 return None
             aspect_rating_norm[aspect.lower()] = rating_norm
@@ -627,9 +570,9 @@ def assert_alpha(alpha):
     for d in range(reviews_cnt):
         total = 0.0
         for a in alpha[d]:
-            # assert geq(a, 0.0) and leq(a, 1.0), "0 <= alpha[d][k] <= 1"
+            assert geq(a, 0.0) and leq(a, 1.0), "0 <= alpha[d][k] <= 1"
             total += a
-        # assert is_almost(total, 1.0), "alpha[d] must add up to 1"
+        assert is_almost(total, 1.0), "alpha[d] must add up to 1"
 
 
 def is_almost(a, b):

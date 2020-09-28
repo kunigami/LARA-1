@@ -50,5 +50,5 @@ np.seterr(all='raise')
 lrr_solver = LRR(
     should_assert=True
 )
-# lrr_solver.EMAlgo(maxIter=20, covergence_threshold=0.0001)
-# lrr_solver.testing()
+lrr_solver.solve(maxIter=20, covergence_threshold=0.0001)
+lrr_solver.testing()
